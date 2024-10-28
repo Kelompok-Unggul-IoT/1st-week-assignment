@@ -1,236 +1,139 @@
-#include "WiFi.h"
-#include "PubSubClient.h"
-#include "Wire.h"
+#include <Arduino.h>
+#include <WiFi.h>
 #include "DHT.h"
-#include "Arduino.h"
-#include "ArduinoJson.h"
+#include "Firebase_ESP_Client.h"
+#include "addons/TokenHelper.h"
+#define DATABASE_URL "https://iot-2024-16551-default-rtdb.asia-southeast1.firebasedatabase.app/"
+#define API_KEY "AIzaSyAhWDXMuBHeiBTR6TbElGQHncMZRQ9UdY4"
+#define PATIENT1_LED_PIN 15
+#define PATIENT2_LED_PIN 2
 
-int AO_PIN = 34;
 int DHT_PIN = 17;
+char ssid[] = "DIRECT-19879533";
+char password[] = "tinggalmasukaja";
+DHT dht(DHT_PIN, DHT22);
 int lamps_pin[4] = {15, 2, 4, 16};
 
-JsonDocument jsonDocument;
-char buffer[250];
+FirebaseData firebaseData;
+FirebaseData ledData;
+FirebaseJson json;
+FirebaseAuth auth;
+FirebaseConfig config;
 
+unsigned long sendDataPrevMillis = 0;
+int count = 0;
+bool signupOK = false;
 
-
-
-char ssid[] = "DIRECT-19876533";
-char password[] = "tinggalmasukaja";
-
-const char* mqtt_server = "mqtt.rekycode.id";  // e.g., "192.168.1.10" or domain like "broker.example.com"
-const int mqtt_port = 1883;                        // Default MQTT port is 1883
-const char* mqtt_user = "reky";      // Leave empty if not using authentication
-const char* mqtt_password = "reky.iot";
-
-WiFiClient espClient;
-PubSubClient client(espClient);
-long lastMsg = 0;
-char msg[50];
-int value = 0;
-
-
-
-DHT dht(DHT_PIN, DHT22);
-
-
-void turnOffLamp(int pin) {
-    digitalWrite(pin, LOW);
-}
-
-void turnOnLamp(int pin) {
-    digitalWrite(pin, HIGH);
-}
-
-int getLumen() {
-    int lumen = analogRead(AO_PIN);
-    return lumen;
-}
-
-void turnOffAllLamp() {
-    for (int i : lamps_pin) {
-        digitalWrite(i, LOW);
-    }
-}
-
-void turnOnAllLamp() {
-    for (int i : lamps_pin) {
-        digitalWrite(i, HIGH);
-    }
-}
-
-float getHumidity(){
-    float humidity = dht.readHumidity();
-    return humidity;
-}
-
-float getTemperature(){
-    float temperature = dht.readTemperature(false);
-    return temperature;
-}
-//void lampGetState() {
-//    int id_lamp = server.pathArg(0).toInt();
-//    int state = digitalRead(lamps_pin[id_lamp - 1]);
-//    if (state == HIGH) {
-//        set_message("lamp", false, "ON");
-//    } else {
-//        set_message("lamp", false, "OFF");
-//    }
-//    server.send(200, "application/json", buffer);
-//}
-
-void strobeLamp(){
-    for (int strobe_time = 0; strobe_time < 6; strobe_time++) {
-        for (int i : lamps_pin) {
-            digitalWrite(i, HIGH);
-            delay(500);
-            digitalWrite(i, LOW);
-            delay(500);
+void sensorupdate(){
+    int h = dht.readHumidity();
+    int t = dht.readTemperature();
+    Serial.print(F("Humidity: "));
+    Serial.print(h);
+    Serial.print(F("% Temperature: "));
+    Serial.print(t);
+    Serial.print(F("°C ,"));
+    if (Firebase.RTDB.setInt(&firebaseData, "iot-db/suhu", t))
+        {
+        Serial.println("PASSED");
+        Serial.println("PATH: " + firebaseData.dataPath());
+        Serial.println("TYPE: " + firebaseData.dataType());
+        Serial.println("ETag: " + firebaseData.ETag());
+        Serial.println("------------------------------------");
+        Serial.println();
         }
+    else {
+        Serial.println("FAILED");
+        Serial.println("REASON: " + firebaseData.errorReason());
     }
-}
-
-void setup_wifi() {
-    delay(10);
-    // We start by connecting to a WiFi network
-    Serial.println();
-    Serial.print("Connecting to ");
-    Serial.println(ssid);
-
-    WiFi.begin(ssid, password);
-
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-    }
-
-    Serial.println("");
-    Serial.println("WiFi connected");
-    Serial.println("IP address: ");
-    Serial.println(WiFi.localIP());
-}
-
-//void callback(char* topic, byte* message, unsigned int length) {
-//    Serial.print("Message arrived on topic: ");
-//    Serial.print(topic);
-//    Serial.print(". Message: ");
-//    char messageTemp[50];
-//
-//    for (int i = 0; i < length; i++) {
-//        Serial.print((char)message[i]);
-//        messageTemp += (char)message[i];
-//    }
-//    Serial.println();
-//
-//    if (String(topic) == "esp32/setLampState") {
-//        Serial.print("Changing output to ");
-//        if(messageTemp == "on"){
-//            Serial.println("on");
-//            turnOnAllLamp();
-//        }
-//        else if(messageTemp == "off"){
-//            Serial.println("off");
-//            turnOffAllLamp();
-//        }
-//    }
-//}
-
-void callback(char* topic, byte* message, unsigned int length) {
-    Serial.print("Message arrived on topic: ");
-    Serial.print(topic);
-    Serial.print(". Message: ");
-
-    // Create a buffer to store the message
-    char messageTemp[256];
-    int i;
-    for (i = 0; i < length; i++) {
-        messageTemp[i] = (char)message[i];
-    }
-    messageTemp[i] = '\0'; // Null-terminate the string
-
-    Serial.println(messageTemp);
-
-    // Parse the JSON message
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, messageTemp);
-
-    if (error) {
-        Serial.print("deserializeJson() failed: ");
-        Serial.println(error.c_str());
-        return;
-    }
-
-    // Extract the "action" key value
-    const char* action = doc["action"];
-
-    if(String(topic) == "esp32/setLampState"){
-        if (strcmp(action, "on") == 0) {
-            turnOnAllLamp();
-        }else if (strcmp(action, "off") == 0){
-            turnOffAllLamp();
+    if (Firebase.RTDB.setInt(&firebaseData, "iot-db/kelembapan", h))
+        {
+        Serial.println("PASSED");
+        Serial.println("PATH: " + firebaseData.dataPath());
+        Serial.println("TYPE: " + firebaseData.dataType());
+        Serial.println("ETag: " + firebaseData.ETag());
+        Serial.println("------------------------------------");
+        Serial.println();
         }
+    else {
+        Serial.println("FAILED");
+        Serial.println("REASON: " + firebaseData.errorReason());
     }
 
 }
 
-void reconnect() {
-    // Loop until we're reconnected
-    while (!client.connected()) {
-        Serial.print("Attempting MQTT connection...");
-        // Attempt to connect
-        if (client.connect("ESP32Client", mqtt_user, mqtt_password)) {
-            Serial.println("connected");
-            // Subscribe
-            client.subscribe("esp32/#");
-        } else {
-            Serial.print("failed, rc=");
-            Serial.print(client.state());
-            Serial.println(" try again in 5 seconds");
-            // Wait 5 seconds before retrying
-            delay(5000);
-        }
+void blinkLed(int ledPin, int times, int interval) {
+
+    for (int i = 0; i < times; i++) {
+
+        digitalWrite(ledPin, HIGH);
+
+        delay(interval);
+
+        digitalWrite(ledPin, LOW);
+
+        delay(interval);
+
     }
+
 }
-void setup() {
+
+void setup(){
     Serial.begin(9600);
-
-    setup_wifi();
-    client.setServer(mqtt_server, 1883);
-    client.setCallback(callback);
-
-    for (int i : lamps_pin) {
-        pinMode(i, OUTPUT);
-    }
     dht.begin();
+    for (int i : lamps_pin) pinMode(i, OUTPUT);
+    WiFi.begin(ssid, password);
+    while (WiFiClass::status() != WL_CONNECTED) {
+        delay(500);
+        Serial.println("Connecting to WiFi..");
+    }
+
+    Serial.println("Connected to the WiFi network");
+    Serial.print("API URL: http://");
+    Serial.println(WiFi.localIP());
+    /* Assign the api key (required) */
+    config.api_key = API_KEY;
+
+    /* Assign the RTDB URL (required) */
+    config.database_url = DATABASE_URL;
+    /* Sign up */
+    if (Firebase.signUp(&config, &auth, "", "")){
+        Serial.println("ok");
+        signupOK = true;
+    }
+    else{
+        Serial.printf("%s\n", config.signer.signupError.message.c_str());
+    }
+
+    /* Assign the callback function for the long running token generation task */
+    config.token_status_callback = tokenStatusCallback; //see addons/TokenHelper.h
+
+    Firebase.begin(&config, &auth);
+    Firebase.reconnectWiFi(true);
 }
-
 void loop(){
-    if (!client.connected()) {
-        reconnect();
-    }
-    client.loop();
+    if (Firebase.ready()) {
 
-    long now = millis();
-    if (now - lastMsg > 5000){
-        lastMsg = now;
+        Firebase.RTDB.getInt(&firebaseData, "patient-nurse-db/patientsatu");
 
-        int lumenValue = getLumen();
-        float humidityValue = dht.readHumidity();
-        float temperatureValue = dht.readTemperature();
+        int patient1Count = firebaseData.intData();
 
-        char humidityString[8];
-        dtostrf(humidityValue, 1, 2, humidityString);
-        client.publish("esp32/humidity", humidityString);
 
-        char temperatureString[8];
-        dtostrf(temperatureValue, 1, 2, temperatureString);
-        client.publish("esp32/temperature", temperatureString);
+        Firebase.RTDB.getInt(&firebaseData, "patient-nurse-db/patientdua");
 
-        char lumenString[8];
-        itoa(lumenValue, lumenString, 10);
-        Serial.print("Lumen = ");
-        Serial.println(getLumen());
-        client.publish("esp32/lumen", lumenString);
+        int patient2Count = firebaseData.intData();
+        if (patient1Count > 0) {
+
+            blinkLed(PATIENT1_LED_PIN, 5, 500);
+
+        }
+
+
+        if (patient2Count > 0) {
+
+            blinkLed(PATIENT2_LED_PIN, 5, 500);
+
+        }
 
     }
+
 }

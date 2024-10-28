@@ -5,11 +5,12 @@
 #include <ArduinoJson.h>
 #include "DHT.h"
 
+
 int AO_PIN = 34;
 int DHT_PIN = 17;
 int lamps_pin[4] = {15, 2, 4, 16};
-char ssid[] = "SSID";
-char password[] = "PASSWORD";
+char ssid[] = "DIRECT-19879533";
+char password[] = "tinggalmasukaja";
 
 DHT dht(DHT_PIN, DHT22);
 WebServer server(80);
@@ -135,8 +136,8 @@ void router(){
 }
 
 void setup() {
-    Serial.begin(9600);
     dht.begin();
+    Serial.begin(9600);
 
     pinMode(AO_PIN, INPUT);
     for (int i : lamps_pin) {
